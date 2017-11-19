@@ -16,50 +16,50 @@ function read_key {
     echo ""
 }
 
+function run_sql {
+    echo "$1"
+    read_key
+    $cdb2sql db1 "$1"
+}
+
 tmux split-window -h -p 50 "figlet create db1; $comdb2 db1 --create; figlet start db1; $comdb2 db1"
 tmux select-pane -t :.0
 read_key
 
-#$cdb2sql db1 "drop table if exists t"
-$cdb2sql db1 "create table t(i int, j int)"
+figlet create table t
+run_sql "create table t(i int, j int)"
+
+figlet create table audit
+run_sql "create table audit(t datetime, event text)"
+$cdb2sql db1 "create procedure audit version 'demo' { $(<audit.lua) }"
+$cdb2sql db1 "put default procedure audit 'demo'"
+figlet add trigger
+run_sql "create lua trigger audit on (table t for insert and delete and update)"
 
 figlet add consumer
 $cdb2sql db1 "create procedure cons version 'demo' { $(<cons.lua) }"
 $cdb2sql db1 "put default procedure cons 'demo'"
-#$cdb2sql db1 "drop lua consumer cons"
-$cdb2sql db1 "create lua consumer cons on (table t for insert and delete and update)"
+run_sql "create lua consumer cons on (table t for insert and delete and update)"
 
-figlet add trigger
-#$cdb2sql db1 "drop table if exists audit"
-$cdb2sql db1 "create table audit(t datetime, event text)"
-$cdb2sql db1 "create procedure audit version 'demo' { $(<audit.lua) }"
-$cdb2sql db1 "put default procedure audit 'demo'"
-#$cdb2sql db1 "drop lua trigger audit"
-$cdb2sql db1 "create lua trigger audit on (table t for insert and delete and update)"
-
+figlet start consumer
+read_key
 tmux split-window -v -p 50 -t :.1 "figlet consumer; $cdb2sql db1 \"exec procedure cons('t')\""
 tmux select-pane -t :.0
 
 figlet insert
-read_key
-$cdb2sql db1 "insert into t select value, value * 10 from generate_series(1, 10)"
+run_sql "insert into t select value, value * 10 from generate_series(1, 3)"
 
 figlet update
-read_key
-$cdb2sql db1 "update t set i = i * 2"
+run_sql "update t set i = i + 1"
 
 figlet delete
-read_key
-$cdb2sql db1 "delete from t"
+run_sql "delete from t where i > 3"
 
-figlet trigger
-read_key
-echo $cdb2sql db1 "select event from audit order by t"
-$cdb2sql db1 "select event from audit order by t"
+figlet audit log
+run_sql "select event, t from audit order by t"
 
 figlet add replicant
-read_key
-cdb2sql db1 "create lua replicant rep"
+run_sql "create lua replicant rep"
 
 figlet clone db1
 read_key
@@ -68,7 +68,7 @@ mv $dbdir/db2/db1.lrl $dbdir/db2/db2.lrl
 sed -i 's/db1/db2/' $dbdir/db2/db2.lrl
 $comdb2 db2 -fullrecovery
 
-tmux split-window -t :.1 -h -p 50 "figlet start db2; $comdb2 db2"
+tmux split-window -t :.1 -v -p 50 "figlet start db2; $comdb2 db2"
 tmux select-pane -t :.0
 $cdb2sql db2 "select 1" >/dev/null 2>&1
 while [[ $? -ne 0 ]]; do
@@ -81,7 +81,7 @@ $cdb2sql db2 "drop lua consumer audit"
 
 figlet start rcv
 read_key
-tmux split-window -t :.3 -h -p 50 "figlet cdb2rcv; $cdb2rcv -s db1@localhost -d db2@localhost -c $dbdir rep"
+tmux split-window -t :.3 -v -p 50 "figlet cdb2rcv; $cdb2rcv -s db1@localhost -d db2@localhost -c $dbdir rep"
 tmux select-pane -t :.0
 
 tmux split-window -t :.0 -v -p 50 "figlet db1; $cdb2sql db1"
