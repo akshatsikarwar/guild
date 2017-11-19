@@ -39,10 +39,10 @@ done
 figlet done
 read_key
 
-figlet create table t
+figlet create t
 run_sql "create table t(i int, j int)"
 
-figlet create table audit
+figlet create audit
 run_sql "create table audit(t datetime, event text)"
 
 figlet create sps
@@ -53,12 +53,10 @@ $cdb2sql db1 "create procedure cons version 'demo-cons' { $(<cons.lua) }"
 $cdb2sql db1 "put default procedure cons 'demo-cons'"
 
 figlet add trigger
-run_sql "create lua trigger audit on (table t for insert and delete and update)"
-sleep 1
+run_sql "create lua trigger audit on (table t for insert and delete)"
 
 figlet add consumer
 run_sql "create lua consumer cons on (table t for insert and delete and update)"
-sleep 1
 
 figlet start consumer
 read_key
@@ -79,9 +77,12 @@ run_sql "select event from audit order by t"
 
 figlet add replicant
 run_sql "create lua replicant rep"
-sleep 1
+figlet done
+read_key
 
 figlet clone db1
+$cdb2sql db1 "exec procedure sys.cmd.send('flush')" > /dev/null
+sleep 1
 rm -rf $dbdir/db2
 mkdir -p $dbdir/db2 && cd $dbdir/db2 && $comdb2ar c $dbdir/db1/db1.lrl 2>/dev/null | tar x 
 mv $dbdir/db2/db1.lrl $dbdir/db2/db2.lrl
