@@ -1,7 +1,6 @@
-export COMDB2_ROOT=/opt/bb
-export PATH=$HOME/src/logical-rep/build/db:$HOME/src/logical-rep/build/tools/cdb2sql:$HOME/src/logical-rep/build/tools/comdb2ar:$HOME/src/logical-rep/build/tools/cdb2rcv:$PATH
-#export COMDB2_ROOT=/bb/comdb2/akdb
-#export PATH=$COMDB2_ROOT/bin:$PATH
+#export PATH=$HOME/src/logical-rep/build/db:$HOME/src/logical-rep/build/tools/cdb2sql:$HOME/src/logical-rep/build/tools/comdb2ar:$HOME/src/logical-rep/build/tools/cdb2rcv:$PATH
+export COMDB2_ROOT=/bb/comdb2/akdb
+export PATH=$COMDB2_ROOT/bin:$PATH
 
 comdb2=$(which comdb2)
 cdb2sql=$(which cdb2sql)
@@ -9,7 +8,6 @@ cdb2rcv=$(which cdb2rcv)
 comdb2ar=$(which comdb2ar)
 
 dbdir=$COMDB2_ROOT/var/cdb2
-rm -rf $dbdir/*
 
 function read_key {
     read -n 1 -s -r -p "Press a key to continue"
@@ -17,13 +15,28 @@ function read_key {
 }
 
 function run_sql {
-    echo "$1"
+    echo "Run SQL: $1"
     read_key
     $cdb2sql db1 "$1"
 }
 
-tmux split-window -h -p 50 "figlet create db1; $comdb2 db1 --create; figlet start db1; $comdb2 db1"
+if [[ $(psef 'comdb2 db' | wc -l) -ne 1 ]]; then
+    echo 'dbs running'
+    psef 'comdb2 db'
+    exit 1
+fi
+
+rm -rf $dbdir/db1
+figlet create db1
+$comdb2 db1 --create > /dev/null 2>&1
+tmux split-window -h -p 50 "figlet start db1; $comdb2 db1"
 tmux select-pane -t :.0
+$cdb2sql db1 "select 1" >/dev/null 2>&1
+while [[ $? -ne 0 ]]; do
+    sleep 0.2
+    $cdb2sql db1 "select 1" >/dev/null 2>&1
+done
+figlet done
 read_key
 
 figlet create table t
@@ -31,45 +44,51 @@ run_sql "create table t(i int, j int)"
 
 figlet create table audit
 run_sql "create table audit(t datetime, event text)"
-$cdb2sql db1 "create procedure audit version 'demo' { $(<audit.lua) }"
-$cdb2sql db1 "put default procedure audit 'demo'"
+
+figlet create sps
+read_key
+$cdb2sql db1 "create procedure audit version 'demo-audit' { $(<audit.lua) }"
+$cdb2sql db1 "put default procedure audit 'demo-audit'"
+$cdb2sql db1 "create procedure cons version 'demo-cons' { $(<cons.lua) }"
+$cdb2sql db1 "put default procedure cons 'demo-cons'"
+
 figlet add trigger
 run_sql "create lua trigger audit on (table t for insert and delete and update)"
+sleep 1
 
 figlet add consumer
-$cdb2sql db1 "create procedure cons version 'demo' { $(<cons.lua) }"
-$cdb2sql db1 "put default procedure cons 'demo'"
 run_sql "create lua consumer cons on (table t for insert and delete and update)"
+sleep 1
 
 figlet start consumer
 read_key
-tmux split-window -v -p 50 -t :.1 "figlet consumer; $cdb2sql db1 \"exec procedure cons('t')\""
+tmux split-window -v -p 50 -t :.1 "figlet consumer; echo 'Run SQL: exec procedure cons()'; $cdb2sql db1 \"exec procedure cons()\""
 tmux select-pane -t :.0
 
 figlet insert
 run_sql "insert into t select value, value * 10 from generate_series(1, 3)"
 
 figlet update
-run_sql "update t set i = i + 1"
+run_sql "update t set i = i + 1 where i < 2"
 
 figlet delete
-run_sql "delete from t where i > 3"
+run_sql "delete from t where i > 2"
 
 figlet audit log
-run_sql "select event, t from audit order by t"
+run_sql "select event from audit order by t"
 
 figlet add replicant
 run_sql "create lua replicant rep"
+sleep 1
 
 figlet clone db1
-read_key
-mkdir -p $dbdir/db2 && cd $dbdir/db2 && comdb2ar c $dbdir/db1/db1.lrl 2>/dev/null | tar x 
+rm -rf $dbdir/db2
+mkdir -p $dbdir/db2 && cd $dbdir/db2 && $comdb2ar c $dbdir/db1/db1.lrl 2>/dev/null | tar x 
 mv $dbdir/db2/db1.lrl $dbdir/db2/db2.lrl
 sed -i 's/db1/db2/' $dbdir/db2/db2.lrl
-$comdb2 db2 -fullrecovery
-
-tmux split-window -t :.1 -v -p 50 "figlet start db2; $comdb2 db2"
-tmux select-pane -t :.0
+$comdb2 db2 -fullrecovery > /dev/null 2>&1
+tmux new-window "$comdb2 db2"
+tmux select-window -t 1
 $cdb2sql db2 "select 1" >/dev/null 2>&1
 while [[ $? -ne 0 ]]; do
     sleep 0.2
@@ -78,12 +97,34 @@ done
 $cdb2sql db2 "drop lua consumer rep"
 $cdb2sql db2 "drop lua consumer cons"
 $cdb2sql db2 "drop lua consumer audit"
+$cdb2sql db2 "exec procedure sys.cmd.send('exit')" > /dev/null
+while [[ $? -eq 0 ]]; do
+    sleep 0.2
+    $cdb2sql db2 "select 1" >/dev/null 2>&1
+done
+sleep 2.5
+tmux kill-window -t 2
+sleep 2.5
 
-figlet start rcv
+tmux split-window -t :.1 -h -p 50 "figlet start db2; $comdb2 db2"
+tmux select-pane -t :.0
+$cdb2sql db2 "select 1" >/dev/null 2>&1
+while [[ $? -ne 0 ]]; do
+    sleep 0.2
+    $cdb2sql db2 "select 1" >/dev/null 2>&1
+done
+figlet done
 read_key
-tmux split-window -t :.3 -v -p 50 "figlet cdb2rcv; $cdb2rcv -s db1@localhost -d db2@localhost -c $dbdir rep"
+
+figlet 'start rep'
+read_key
+tmux split-window -t :.3 -v -p 50 "figlet cdb2rcv; echo 'Run SQL: exec procedure rep()'; $cdb2rcv -s db1@$HOSTNAME -d db2@$HOSTNAME rep"
 tmux select-pane -t :.0
 
-tmux split-window -t :.0 -v -p 50 "figlet db1; $cdb2sql db1"
-tmux split-window -t :.1 -v -p 50 "figlet db2; $cdb2sql db2"
+figlet 'done'
+read_key
+tmux split-window -t :.0 -v -p 50 "figlet db2; $cdb2sql db2"
 tmux select-pane -t :.0
+clear
+figlet db1
+$cdb2sql db1
